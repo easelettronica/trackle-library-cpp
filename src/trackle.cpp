@@ -30,10 +30,12 @@
 #define USER_FUNC_KEY_LENGTH 64
 #define USER_FUNC_ARG_LENGTH 622
 
+#define DEFAULT_CONNECTION_TIMEOUT 1000
 #define RECONNECTION_TIMEOUT 3750
-#define MAX_RECONNECTION_RETRY_INCREMENT 5 // 2^5 * 3750 = 60 seconds
+#define MAX_RECONNECTION_RETRY_INCREMENT 4 // 2^4 * 3750 = 60 seconds
+bool first_connection_completed = false;
 uint16_t connection_retry = 0;
-uint32_t connection_timeout = 1000;
+uint32_t connection_timeout = DEFAULT_CONNECTION_TIMEOUT;
 
 #define MAX_COUNTER 9999999
 #define MAX_PING_INTERVAL 1000
@@ -199,7 +201,7 @@ void increase_connection_timeout()
  */
 void reset_connection_timeout()
 {
-    connection_timeout = 1000;
+    connection_timeout = DEFAULT_CONNECTION_TIMEOUT;
     connection_retry = 0;
 }
 
@@ -531,7 +533,7 @@ inline uint32_t convert(uint32_t flags)
     return flags;
 }
 
-bool Trackle::sendPublish(const char *eventName, const char *data, int ttl, Event_Type eventType, Event_Flags eventFlag, string msg_id)
+bool Trackle::sendPublish(const char *eventName, const char *data, int ttl, Event_Type eventType, Event_Flags eventFlag, uint32_t msg_key)
 {
     if (!cloudEnabled)
         return false;
@@ -544,78 +546,98 @@ bool Trackle::sendPublish(const char *eventName, const char *data, int ttl, Even
     if (eventFlag & WITH_ACK)
     { // se c'è il flag WITH_ACK
 
-        uint32_t key = 0;
-        if (msg_id.compare("") == 0)
+        if (msg_key == 0)
         {
-            key = getNextPublishCounter();
-        }
-        else
-        {
-            key = atoi(msg_id.c_str());
+            msg_key = getNextPublishCounter();
         }
 
         d.handler_callback = completedPublishCb;
-        d.handler_data = (void *)key;
+        d.handler_data = (void *)msg_key;
 
         if (connectionStatus == SOCKET_READY)
         { // publish send ok
             LOG(TRACE, "sendPublishCb OK");
             if (sendPublishCb)
-                (*sendPublishCb)(eventName, data, int_to_string(key).c_str(), true);
+                (*sendPublishCb)(eventName, data, msg_key, true);
         }
         else
         { // publish send error
             LOG(TRACE, "sendPublishCb ERROR");
             if (sendPublishCb)
-                (*sendPublishCb)(eventName, data, int_to_string(key).c_str(), false);
+                (*sendPublishCb)(eventName, data, msg_key, false);
         }
     }
 
     LOG(TRACE, "sendPublish %s: %s ", eventName, data);
     int res = 0;
-    if (connectionStatus == SOCKET_READY)
-        res = trackle_protocol_send_event(protocol, eventName, data, ttl, flags, &d);
+    if (connectionStatus == SOCKET_READY && strlen(data) <= MAX_BLOCK_SIZE * MAX_BLOCKS_NUMBER)
+    {
+        using namespace trackle::protocol;
+        
+        if (strlen(data) > MAX_BLOCK_SIZE)
+        {
+            if (Messages::blockTransmissionRunning)
+                return false;
+
+            memcpy(Messages::blocksBuffer, data, strlen(data));
+            Messages::currBlockIndex = 0;
+            Messages::totBytesNumber = strlen(data);
+            Messages::currEventName = std::string(eventName);
+            Messages::currentToken = static_cast<uint16_t>(HAL_RNG_GetRandomNumber() & 0xFFFF);
+            Messages::blockTransmissionRunning = true;
+            Messages::ttl = ttl;
+            Messages::flags = flags;
+            Messages::completionCb = completedPublishCb;
+            d.handler_callback = trackle::protocol::genericBlockCompletionCallback;
+            res = trackle_protocol_send_event_in_blocks(protocol, ttl, flags, &d);
+        }
+        else
+        {
+            res = trackle_protocol_send_event(protocol, eventName, data, ttl, flags, &d);
+        }
+    }
+
     return res;
 }
 
-bool Trackle::publish(const char *eventName, const char *data, int ttl, Event_Type eventType, Event_Flags eventFlag, string msg_id)
+bool Trackle::publish(const char *eventName, const char *data, int ttl, Event_Type eventType, Event_Flags eventFlag, uint32_t msg_key)
 {
-    return sendPublish(eventName, data, ttl, eventType, eventFlag, msg_id);
+    return sendPublish(eventName, data, ttl, eventType, eventFlag, msg_key);
 }
 
-bool Trackle::publish(string eventName, const char *data, int ttl, Event_Type eventType, Event_Flags eventFlag, string msg_id)
+bool Trackle::publish(string eventName, const char *data, int ttl, Event_Type eventType, Event_Flags eventFlag, uint32_t msg_key)
 {
-    return sendPublish(eventName.c_str(), data, ttl, eventType, eventFlag, msg_id);
+    return sendPublish(eventName.c_str(), data, ttl, eventType, eventFlag, msg_key);
 }
 
-bool Trackle::publish(const char *eventName, const char *data, Event_Type eventType, Event_Flags eventFlag, string msg_id)
+bool Trackle::publish(const char *eventName, const char *data, Event_Type eventType, Event_Flags eventFlag, uint32_t msg_key)
 {
-    return sendPublish(eventName, data, DEFAULT_TTL, eventType, eventFlag, msg_id);
+    return sendPublish(eventName, data, DEFAULT_TTL, eventType, eventFlag, msg_key);
 }
 
-bool Trackle::publish(string eventName, const char *data, Event_Type eventType, Event_Flags eventFlag, string msg_id)
+bool Trackle::publish(string eventName, const char *data, Event_Type eventType, Event_Flags eventFlag, uint32_t msg_key)
 {
-    return sendPublish(eventName.c_str(), data, DEFAULT_TTL, eventType, eventFlag, msg_id);
+    return sendPublish(eventName.c_str(), data, DEFAULT_TTL, eventType, eventFlag, msg_key);
 }
 
 bool Trackle::publish(const char *eventName)
 {
-    return sendPublish(eventName, NULL, DEFAULT_TTL, PUBLIC, EMPTY_FLAGS, "");
+    return sendPublish(eventName, NULL, DEFAULT_TTL, PUBLIC, EMPTY_FLAGS, 0);
 }
 
 bool Trackle::publish(string eventName)
 {
-    return sendPublish(eventName.c_str(), NULL, DEFAULT_TTL, PUBLIC, EMPTY_FLAGS, "");
+    return sendPublish(eventName.c_str(), NULL, DEFAULT_TTL, PUBLIC, EMPTY_FLAGS, 0);
 }
 
 bool Trackle::syncState(const char *data)
 {
-    return sendPublish("trackle/p", data, DEFAULT_TTL, PUBLIC, EMPTY_FLAGS, "");
+    return sendPublish("trackle/p", data, DEFAULT_TTL, PUBLIC, EMPTY_FLAGS, 0);
 }
 
 bool Trackle::syncState(string data)
 {
-    return sendPublish("trackle/p", data.c_str(), DEFAULT_TTL, PUBLIC, EMPTY_FLAGS, "");
+    return sendPublish("trackle/p", data.c_str(), DEFAULT_TTL, PUBLIC, EMPTY_FLAGS, 0);
 }
 
 bool Trackle::getTime()
@@ -1640,8 +1662,10 @@ int Trackle::connect()
         LOG(TRACE, "Protocol already initialized");
         setConnectionStatus(SOCKET_CONNECTING);
         int res = -1;
+        
         string address = "device.trackle.io";
         address = string_device_id + ".udp." + address;
+        
         res = (*connectCb)(address.c_str(), 5684);
 
         // If it returns < 0, it's an immediate error
@@ -1739,12 +1763,23 @@ void Trackle::loop()
          * There was an error?
          */
         if (ret < 0)
-        { // on cloud connection error, increase timeout
-            LOG(TRACE, "Cloud connection error, increment reconnection timeout...");
-            increase_connection_timeout();
+        {
+            if (!first_connection_completed)
+            {
+                // if never connected, don't increase connection retry timeout
+                LOG(TRACE, "Cloud connection error, never connected successfull...");
+                reset_connection_timeout();
+            }
+            else
+            {
+                // on cloud connection error, increase connection retry timeout
+                LOG(TRACE, "Cloud connection error, increment reconnection timeout...");
+                increase_connection_timeout();
+            }
         }
         else if (ret > 0) /* on success connection, reset timeout */
         {
+            first_connection_completed = true;
             reset_connection_timeout();
         }
         else
@@ -2004,7 +2039,8 @@ static uint32_t dumb_millis_callback()
  */
 static uint32_t (*latest_millis_callback)() = dumb_millis_callback;
 
-void TrackleLib_tinydtls_millis_wrapper(uint32_t* t) {
+void TrackleLib_tinydtls_millis_wrapper(uint32_t *t)
+{
     *t = latest_millis_callback();
 }
 
