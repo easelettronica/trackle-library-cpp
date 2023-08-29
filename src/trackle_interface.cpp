@@ -362,7 +362,8 @@ void trackleInit(Trackle *v)
 
 Trackle *newTrackle(void)
 {
-    return new Trackle();
+    static Trackle TrackleInstance;
+    return &TrackleInstance;
 }
 
 void deleteTrackle(Trackle *v)
