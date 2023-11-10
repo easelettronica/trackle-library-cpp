@@ -40,9 +40,14 @@ uint32_t connection_timeout = DEFAULT_CONNECTION_TIMEOUT;
 #define MAX_COUNTER 9999999
 #define MAX_PING_INTERVAL 1000
 
+#ifndef VERSION_DEV
+    #define VERSION_DEV ""
+#endif
+
 const uint32_t PUBLISH_EVENT_FLAG_PUBLIC = 0x0;
 const uint32_t PUBLISH_EVENT_FLAG_PRIVATE = 0x1;
 const int CLAIM_CODE_SIZE = 63;
+const int COMPONENTS_LIST_SIZE = 200;
 
 // DICHIARAZIONI  ------------------------------------------------------------
 
@@ -233,6 +238,7 @@ char device_id[DEVICE_ID_LENGTH];
 unsigned char server_public_key[PUBLIC_KEY_LENGTH] = {0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04, 0x2B, 0x19, 0x9D, 0xC9, 0xF2, 0xB0, 0x2D, 0xD1, 0xF1, 0x7D, 0xF0, 0x2B, 0xD1, 0xEC, 0xD1, 0x57, 0xD6, 0x74, 0x51, 0xD7, 0x9C, 0x09, 0xE1, 0x70, 0x43, 0x4A, 0x5B, 0xC2, 0x40, 0xC0, 0x49, 0x67, 0x34, 0xC8, 0xA4, 0xF8, 0xB4, 0xF7, 0xFB, 0xB4, 0xD0, 0x3F, 0xCC, 0xAF, 0x1F, 0xAA, 0x2E, 0x1D, 0x76, 0x82, 0xCF, 0x3A, 0x1A, 0x0B, 0x42, 0x38, 0x14, 0x6D, 0x54, 0x42, 0x05, 0xDC, 0x4D, 0x27};
 unsigned char client_private_key[PRIVATE_KEY_LENGTH];
 char claim_code[CLAIM_CODE_SIZE + 1];
+char components_list[COMPONENTS_LIST_SIZE + 1];
 
 // TRACKLE.VARIABLE ------------------------------------------------------------
 
@@ -573,7 +579,7 @@ bool Trackle::sendPublish(const char *eventName, const char *data, int ttl, Even
     if (connectionStatus == SOCKET_READY && strlen(data) <= MAX_BLOCK_SIZE * MAX_BLOCKS_NUMBER)
     {
         using namespace trackle::protocol;
-        
+
         if (strlen(data) > MAX_BLOCK_SIZE)
         {
             if (Messages::blockTransmissionRunning)
@@ -587,7 +593,7 @@ bool Trackle::sendPublish(const char *eventName, const char *data, int ttl, Even
             Messages::blockTransmissionRunning = true;
             Messages::ttl = ttl;
             Messages::flags = flags;
-            Messages::completionCb = d.handler_callback; // only if function has flag WITH_ACK 
+            Messages::completionCb = d.handler_callback; // only if function has flag WITH_ACK
             d.handler_callback = trackle::protocol::genericBlockCompletionCallback;
             res = trackle_protocol_send_event_in_blocks(protocol, ttl, flags, &d);
         }
@@ -1046,7 +1052,7 @@ bool appendSystemInfo(appender_fn appender, void *append, void *reserved)
     product_details_t details;
     details.size = sizeof(details);
 
-    string json = "\"i\":" + int_to_string(connectionPropType.ping_interval) + "." + int_to_string(connectionType) + ",\"o\":" + int_to_string(otaMethod) + ",\"p\":" + int_to_string(PLATFORM_ID) + ",\"s\":\"" + int_to_string(VERSION_MAYOR) + "." + int_to_string(VERSION_MINOR) + "." + int_to_string(VERSION_PATCH) + "\"";
+    string json = "\"i\":" + int_to_string(connectionPropType.ping_interval) + "." + int_to_string(connectionType) + ",\"o\":" + int_to_string(otaMethod) + ",\"p\":" + int_to_string(PLATFORM_ID) + ",\"s\":\"" + int_to_string(VERSION_MAJOR) + "." + int_to_string(VERSION_MINOR) + "." + int_to_string(VERSION_PATCH) + VERSION_DEV + "\"" + components_list;
 
     LOG(ERROR, "%s", json.c_str());
     const char *result = json.c_str();
@@ -1430,6 +1436,12 @@ void Trackle::setClaimCode(const char *claimCode)
     claim_code[CLAIM_CODE_SIZE] = 0;
 }
 
+void Trackle::setComponentsList(const char *componentsList)
+{
+    memset(components_list, 0, COMPONENTS_LIST_SIZE);
+    sprintf(components_list, ",\"c\":\"%s\"", componentsList);
+}
+
 void Trackle::setSaveSessionCallback(saveSessionCallback *save)
 {
     callbacks.save = save;
@@ -1662,10 +1674,10 @@ int Trackle::connect()
         LOG(TRACE, "Protocol already initialized");
         setConnectionStatus(SOCKET_CONNECTING);
         int res = -1;
-        
+
         string address = "device.trackle.io";
         address = string_device_id + ".udp." + address;
-        
+
         res = (*connectCb)(address.c_str(), 5684);
 
         // If it returns < 0, it's an immediate error
@@ -1743,7 +1755,7 @@ void Trackle::loop()
             // create socket
             if (Trackle::connect() > 0)
             { // socket creation ok
-                LOG(INFO, "Socket connection completed, starting handshake");
+                LOG(INFO, "Socket creation completed, starting handshake");
             }
             else // on socket creation error, reset timeout
             {
