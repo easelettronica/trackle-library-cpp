@@ -70,7 +70,7 @@ extern "C"
      * @trackle
      * @copydetails Trackle::publish()
      */
-    bool tracklePublish(Trackle *v, const char *eventName, const char *data, int ttl, Event_Type eventType, Event_Flags eventFlag) DYNLIB;
+    bool tracklePublish(Trackle *v, const char *eventName, const char *data, int ttl, Event_Type eventType, Event_Flags eventFlag, uint32_t msg_key) DYNLIB;
 
     /*!
      * @copybrief Trackle::syncState()
@@ -225,6 +225,13 @@ extern "C"
      * @copydetails Trackle::setClaimCode()
      */
     void trackleSetClaimCode(Trackle *v, const char *claimCode) DYNLIB;
+
+    /*!
+     * @copybrief Trackle::setComponentsList()
+     * @trackle
+     * @copydetails Trackle::setComponentsList()
+     */
+    void trackleSetComponentsList(Trackle *v, const char *componentsList);
 
     /*!
      * @copybrief Trackle::setSaveSessionCallback()
